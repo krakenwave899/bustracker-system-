@@ -23,6 +23,12 @@ app.get('/', (req, res) => {
   res.json({ message: 'Bus Tracking API is running!' });
 });
 
+// Routes
+app.use('/api/buses', require('./routes/busRoutes'));
+app.use('/api/routes', require('./routes/routeRoutes'));
+app.use('/api/stops', require('./routes/stopRoutes'));
+app.use('/api/eta', require('./routes/etaRoutes'));
+
 // Socket.io connection
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
