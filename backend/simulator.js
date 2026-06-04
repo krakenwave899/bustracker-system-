@@ -5,6 +5,22 @@ const collegeRoutes = require('./routes');
 const BASE_URL = 'http://localhost:5000';
 const routeKeys = Object.keys(collegeRoutes);
 
+// Get actual road path between two points using OSRM (free, no API key)
+async function getRoadPath(start, end) {
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson`;
+    const res = await axios.get(url, { timeout: 5000 });
+    const coords = res.data.routes[0].geometry.coordinates;
+    // OSRM returns [lng, lat] — we need to flip to [lat, lng]
+    return coords.map(([lng, lat]) => ({ lat, lng }));
+  } catch (err) {
+    console.log(`OSRM unavailable, using straight line for this segment`);
+    // Fallback to straight line if OSRM fails
+    return interpolate(start, end, 15);
+  }
+}
+
+// Straight line fallback
 function interpolate(start, end, steps) {
   const points = [];
   for (let i = 0; i <= steps; i++) {
@@ -24,17 +40,17 @@ async function sendLocation(busId, lat, lng, speed) {
     });
     console.log(`Bus ${busId.slice(-4)} → ${lat.toFixed(4)}, ${lng.toFixed(4)} @ ${speed}km/h`);
   } catch (err) {
-    console.error('Error:', err.message);
+    console.error('Send error:', err.message);
   }
 }
 
 async function moveBus(busId, busNumber, routeIndex) {
-  const routeKey  = routeKeys[routeIndex % routeKeys.length];
-  const route     = collegeRoutes[routeKey];
-  const stops     = route.stops;
-  let stopIndex   = 0;
+  const routeKey = routeKeys[routeIndex % routeKeys.length];
+  const route    = collegeRoutes[routeKey];
+  const stops    = route.stops;
+  let stopIndex  = 0;
 
-  console.log(`\n${busNumber} → ${route.name}`);
+  console.log(`\n${busNumber} → ${route.name} (with road routing)`);
 
   while (true) {
     const current = stops[stopIndex];
@@ -42,7 +58,8 @@ async function moveBus(busId, busNumber, routeIndex) {
 
     console.log(`${busNumber}: ${current.name} → ${next.name}`);
 
-    const path = interpolate(current, next, 30);
+    // Get actual road path
+    const path = await getRoadPath(current, next);
 
     for (const point of path) {
       const speed = Math.floor(Math.random() * 20) + 20;
@@ -51,6 +68,9 @@ async function moveBus(busId, busNumber, routeIndex) {
     }
 
     stopIndex = (stopIndex + 1) % stops.length;
+
+    // Small pause at each stop
+    await new Promise(r => setTimeout(r, 3000));
   }
 }
 
@@ -64,10 +84,11 @@ async function startSimulation() {
       process.exit(1);
     }
 
-    console.log(`Starting ${buses.length} buses on real Chennai college routes!\n`);
+    console.log(`Starting ${buses.length} buses with REAL road routing!\n`);
 
+    // Stagger bus starts so OSRM doesn't get overloaded
     buses.forEach((bus, index) => {
-      setTimeout(() => moveBus(bus._id, bus.busNumber, index), index * 3000);
+      setTimeout(() => moveBus(bus._id, bus.busNumber, index), index * 2000);
     });
 
   } catch (err) {
