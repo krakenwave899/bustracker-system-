@@ -18,18 +18,25 @@ app.use(express.json());
 // Connect Database
 connectDB();
 
+// Make io accessible to routes
+app.set('io', io);
+
+// Routes
+app.use('/api/buses',    require('./routes/busRoutes'));
+app.use('/api/routes',   require('./routes/routeRoutes'));
+app.use('/api/stops',    require('./routes/stopRoutes'));
+app.use('/api/eta',      require('./routes/etaRoutes'));
+app.use('/api/location', require('./routes/locationRoutes'));
+app.use('/api/auth',     require('./routes/authRoutes'));
+app.use('/api/admin', require('./routes/adminRoutes'));
+
+
 // Basic route to test
 app.get('/', (req, res) => {
   res.json({ message: 'Bus Tracking API is running!' });
 });
 
-// Routes
-app.use('/api/buses', require('./routes/busRoutes'));
-app.use('/api/routes', require('./routes/routeRoutes'));
-app.use('/api/stops', require('./routes/stopRoutes'));
-app.use('/api/eta', require('./routes/etaRoutes'));
-
-// Socket.io connection
+// Socket.io
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
   socket.on('disconnect', () => {
