@@ -4,6 +4,7 @@ const connectDB = require('./db');
 const Bus = require('./models/bus');
 const Route = require('./models/route');
 const Stop = require('./models/stop');
+const collegeRoutes = require('./routes');
 
 const seed = async () => {
   await connectDB();
@@ -12,31 +13,64 @@ const seed = async () => {
   await Route.deleteMany();
   await Stop.deleteMany();
 
-  const stops = await Stop.insertMany([
-    { stopName: 'College Main Gate', lat: 13.0827, lng: 80.2707, stopOrder: 1 },
-    { stopName: 'Tambaram',          lat: 12.9249, lng: 80.1000, stopOrder: 2 },
-    { stopName: 'Chromepet',         lat: 12.9516, lng: 80.1462, stopOrder: 3 },
-    { stopName: 'Pallavaram',        lat: 12.9675, lng: 80.1491, stopOrder: 4 },
-    { stopName: 'Guindy',            lat: 13.0067, lng: 80.2206, stopOrder: 5 },
-  ]);
+  console.log('Seeding all 43 college bus routes...');
 
-  const route = await Route.create({
-    routeName:   'Tambaram to College',
-    routeNumber: 'R1',
-    stops:       stops.map(s => s._id),
-    startTime:   '07:00 AM',
-    endTime:     '09:00 AM',
-    isActive:    true
-  });
+  const routeKeys = Object.keys(collegeRoutes);
 
-  await Bus.insertMany([
-    { busNumber: 'TN01-1234', driverName: 'Kumar',  routeId: route._id, capacity: 50, status: 'active', lastLat: 13.0067, lastLng: 80.2206 },
-    { busNumber: 'TN01-5678', driverName: 'Rajan',  routeId: route._id, capacity: 50, status: 'idle',   lastLat: 12.9516, lastLng: 80.1462 },
-    { busNumber: 'TN01-9999', driverName: 'Selvam', routeId: route._id, capacity: 40, status: 'active', lastLat: 12.9675, lastLng: 80.1491 },
-  ]);
+  for (const key of routeKeys) {
+    const routeData = collegeRoutes[key];
 
-  console.log('Seed data inserted successfully!');
+    // Create stops
+    const stops = await Stop.insertMany(
+      routeData.stops.map((s, i) => ({
+        stopName:  s.name,
+        lat:       s.lat,
+        lng:       s.lng,
+        stopOrder: i + 1,
+      }))
+    );
+
+    // Create route
+    const route = await Route.create({
+      routeName:   routeData.name,
+      routeNumber: key,
+      stops:       stops.map(s => s._id),
+      startTime:   routeData.departureTime,
+      endTime:     '7:40am',
+      isActive:    true
+    });
+
+    // Create bus for this route
+    await Bus.create({
+      busNumber:   `BUS-${key}`,
+      driverName:  getDriverName(key),
+      routeId:     route._id,
+      capacity:    50,
+      status:      'active',
+      lastLat:     routeData.stops[0].lat,
+      lastLng:     routeData.stops[0].lng,
+    });
+
+    console.log(`✓ ${key} — ${routeData.name}`);
+  }
+
+  console.log(`\nDone! ${routeKeys.length} buses seeded successfully.`);
   process.exit(0);
 };
+
+function getDriverName(routeKey) {
+  const drivers = {
+    Route01: 'Kumar',    Route02: 'Rajan',    Route03: 'Selvam',
+    Route04: 'Muthu',    Route4A: 'Senthil',  Route05: 'Arjun',
+    Route06: 'Vijay',    Route07: 'Suresh',   Route08: 'Ramesh',
+    Route09: 'Ganesh',   Route10: 'Prakash',  Route11: 'Dinesh',
+    Route12: 'Manoj',    Route13: 'Karthik',  Route14: 'Balaji',
+    Route15: 'Rajesh',   Route17: 'Sathish',  Route19: 'Mohan',
+    Route21: 'Venkat',   Route29: 'Anand',    Route35: 'Praveen',
+    Route36: 'Siva',     Route39: 'Ashwin',   Route41: 'Deepak',
+    Route43: 'Naveen',
+  };
+  return drivers[routeKey] || 'Driver';
+}
 
 seed();
