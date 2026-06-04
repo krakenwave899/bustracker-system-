@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import MapView from './components/MapView';
 import Sidebar from './components/Sidebar';
 import AdminDashboard from './components/AdminDashboard';
+import Notifications from './components/Notifications';
 
 function App() {
   const [selectedBus, setSelectedBus] = useState(null);
@@ -9,7 +10,6 @@ function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
-      {/* Admin Button */}
       <button
         onClick={() => setShowAdmin(true)}
         style={{
@@ -36,10 +36,11 @@ function App() {
         />
       </div>
 
-      {/* Admin Dashboard Modal */}
       {showAdmin && (
         <AdminDashboard onClose={() => setShowAdmin(false)} />
       )}
+
+      <Notifications />
     </div>
   );
 }
