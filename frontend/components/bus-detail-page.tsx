@@ -5,7 +5,6 @@ import { Bus } from '@/lib/bus-data'
 import dynamic from 'next/dynamic'
 import { useState, useEffect } from 'react'
 import socket from '@/lib/socket'
-import { getLatestLocation } from '@/lib/api'
 
 const BusMap = dynamic(() => import('./tracking-map').then(mod => mod.BusMap), {
   ssr: false,
@@ -21,34 +20,84 @@ interface BusDetailPageProps {
   onBack: () => void
 }
 
+// Haversine distance in meters
+function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 6371000
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLng = ((lng2 - lng1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2)
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
 export function BusDetailPage({ bus, onBack }: BusDetailPageProps) {
   const [alertSet, setAlertSet] = useState(false)
   const [liveSpeed, setLiveSpeed] = useState(bus.speed)
-  const [livePosition, setLivePosition] = useState({ lat: bus.lat, lng: bus.lng })
   const [lastUpdated, setLastUpdated] = useState(bus.lastUpdated)
   const [liveBus, setLiveBus] = useState(bus)
+  const [nextStopIndex, setNextStopIndex] = useState(bus.nextStopIndex)
+  const [completedStops, setCompletedStops] = useState<boolean[]>(
+    bus.stops.map(s => s.completed || false)
+  )
 
   useEffect(() => {
-    // Listen for real-time location updates
+    // Fetch real bus position first
+    fetch('http://localhost:5000/api/buses')
+      .then(res => res.json())
+      .then(buses => {
+        const realBus = buses.find((b: any) =>
+          b.busNumber.includes(bus.routeNumber.replace('Route ', 'Route'))
+        )
+        if (realBus && realBus.lastLat && realBus.lastLng) {
+          updateStopProgress(realBus.lastLat, realBus.lastLng)
+        }
+      })
+      .catch(() => {})
+
+    // Listen for real-time updates
     socket.on('busLocationUpdate', (data: any) => {
-      // Match by route number since MongoDB IDs differ from static IDs
-      if (data.busId) {
-        setLiveSpeed(data.speed || 0)
-        setLivePosition({ lat: data.lat, lng: data.lng })
-        setLastUpdated('Just now')
-        setLiveBus(prev => ({
-          ...prev,
-          lat: data.lat,
-          lng: data.lng,
-          speed: data.speed || 0,
-        }))
-      }
+      if (!data.lat || !data.lng) return
+      setLiveSpeed(data.speed || 0)
+      setLastUpdated('Just now')
+      setLiveBus(prev => ({
+        ...prev,
+        lat: data.lat,
+        lng: data.lng,
+        speed: data.speed || 0,
+      }))
+      updateStopProgress(data.lat, data.lng)
     })
 
     return () => {
       socket.off('busLocationUpdate')
     }
   }, [bus.id])
+
+  const updateStopProgress = (busLat: number, busLng: number) => {
+    const PASSED_THRESHOLD = 800 // meters — if bus is within 800m of a stop, mark previous ones as passed
+
+    // Find the closest stop to current bus position
+    let closestIndex = 0
+    let closestDist = Infinity
+    bus.stops.forEach((stop, index) => {
+      const dist = distanceMeters(busLat, busLng, stop.lat, stop.lng)
+      if (dist < closestDist) {
+        closestDist = dist
+        closestIndex = index
+      }
+    })
+
+    // If bus is close to a stop, that stop is "next" and all before it are "passed"
+    const newNextIndex = closestDist < PASSED_THRESHOLD ? closestIndex : Math.max(0, closestIndex)
+    setNextStopIndex(newNextIndex)
+
+    // Mark all stops before nextStopIndex as completed
+    setCompletedStops(bus.stops.map((_, index) => index < newNextIndex))
+  }
 
   const statusConfig = {
     'on-time': { label: 'On Time', color: 'text-success' },
@@ -57,6 +106,13 @@ export function BusDetailPage({ bus, onBack }: BusDetailPageProps) {
   }
 
   const status = statusConfig[bus.status]
+
+  const getETA = (index: number) => {
+    if (completedStops[index]) return 'Passed'
+    if (index === nextStopIndex) return `${Math.max(1, Math.round(liveSpeed > 0 ? 2 : 5))} mins`
+    const minsFromNext = (index - nextStopIndex) * 8
+    return `~${minsFromNext} mins`
+  }
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -83,7 +139,7 @@ export function BusDetailPage({ bus, onBack }: BusDetailPageProps) {
         </div>
       </header>
 
-      {/* Map — passes live position */}
+      {/* Map */}
       <BusMap bus={liveBus} />
 
       {/* Info Bar */}
@@ -118,27 +174,11 @@ export function BusDetailPage({ bus, onBack }: BusDetailPageProps) {
           
           <div className="space-y-1">
             {bus.stops.map((stop, index) => {
-              const isCompleted = stop.completed
-              const isNext = index === bus.nextStopIndex
-              const isBusHere = index === bus.nextStopIndex - 1 || (bus.nextStopIndex === 0 && index === 0)
-              
-              const getETA = () => {
-                if (isCompleted) return 'Passed'
-                if (isNext) return bus.eta
-                const minsFromNext = (index - bus.nextStopIndex) * 8
-                return `~${parseInt(bus.eta) + minsFromNext} mins`
-              }
+              const isCompleted = completedStops[index]
+              const isNext = index === nextStopIndex
 
               return (
                 <div key={index} className="relative">
-                  {isBusHere && bus.status !== 'not-started' && (
-                    <div className="absolute left-[7px] -top-3 z-10">
-                      <div className="flex items-center justify-center w-4 h-4 bg-primary rounded-full animate-bounce">
-                        <MapPin className="w-2.5 h-2.5 text-primary-foreground" />
-                      </div>
-                    </div>
-                  )}
-                  
                   <div className={`flex items-center gap-4 p-3 rounded-xl transition-colors ${
                     isNext ? 'bg-primary/10 border border-primary/30' : ''
                   }`}>
@@ -174,7 +214,7 @@ export function BusDetailPage({ bus, onBack }: BusDetailPageProps) {
                       isCompleted ? 'text-muted-foreground' :
                       isNext ? 'text-primary' : 'text-muted-foreground'
                     }`}>
-                      {getETA()}
+                      {getETA(index)}
                     </div>
                   </div>
                 </div>
@@ -185,7 +225,7 @@ export function BusDetailPage({ bus, onBack }: BusDetailPageProps) {
       </div>
 
       {/* Alert Button */}
-      <div className="sticky bottom-0 bg-card border-t border-border p-4 safe-area-inset-bottom">
+      <div className="sticky bottom-0 bg-card border-t border-border p-4">
         <button
           onClick={() => setAlertSet(!alertSet)}
           className={`w-full py-4 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${
