@@ -10,32 +10,67 @@ interface BusMapProps {
   bus: Bus
 }
 
+// Fetch road path between all stops using OSRM
+async function getRoadRoute(stops: { lat: number; lng: number }[]) {
+  try {
+    const coords = stops.map(s => `${s.lng},${s.lat}`).join(';')
+    const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`
+    const res = await fetch(url)
+    const data = await res.json()
+    if (data.routes && data.routes[0]) {
+      return data.routes[0].geometry.coordinates.map(([lng, lat]: [number, number]) => [lat, lng] as [number, number])
+    }
+  } catch (err) {
+    console.log('OSRM unavailable, using straight line')
+  }
+  // Fallback to straight line
+  return stops.map(s => [s.lat, s.lng] as [number, number])
+}
+
+// Smooth animation between two points
+function animateMarker(
+  marker: L.Marker,
+  from: [number, number],
+  to: [number, number],
+  duration: number
+) {
+  const start = Date.now()
+  const animate = () => {
+    const elapsed = Date.now() - start
+    const t = Math.min(elapsed / duration, 1)
+    const lat = from[0] + (to[0] - from[0]) * t
+    const lng = from[1] + (to[1] - from[1]) * t
+    marker.setLatLng([lat, lng])
+    if (t < 1) requestAnimationFrame(animate)
+  }
+  requestAnimationFrame(animate)
+}
+
 export function BusMap({ bus }: BusMapProps) {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<L.Map | null>(null)
   const markerRef = useRef<L.Marker | null>(null)
+  const routeLineRef = useRef<L.Polyline | null>(null)
   const initializedRef = useRef(false)
-  const lastUpdateRef = useRef(0)
+  const lastPositionRef = useRef<[number, number] | null>(null)
   const [realBusId, setRealBusId] = useState<string | null>(null)
 
-  // Step 1: Fetch real bus ID and position from backend
+  // Step 1: Fetch real bus ID
   useEffect(() => {
     fetch('http://localhost:5000/api/buses')
       .then(res => res.json())
       .then(buses => {
-        // Match route number — your buses are named BUS-Route01, BUS-Route02 etc
-        const routeKey = bus.routeNumber.replace('Route ', 'Route0').replace('Route 0', 'Route0')
         const realBus = buses.find((b: any) =>
           b.busNumber === `BUS-${bus.routeNumber.replace('Route ', 'Route')}` ||
           b.busNumber.includes(bus.routeNumber.replace('Route ', 'Route'))
         )
-
         if (realBus) {
           setRealBusId(realBus._id)
-          // Move marker to real position
           if (markerRef.current && realBus.lastLat && realBus.lastLng) {
-            markerRef.current.setLatLng([realBus.lastLat, realBus.lastLng])
-            mapInstanceRef.current?.panTo([realBus.lastLat, realBus.lastLng])
+            const pos: [number, number] = [realBus.lastLat, realBus.lastLng]
+            markerRef.current.setLatLng(pos)
+            lastPositionRef.current = pos
+            mapInstanceRef.current?.panTo(pos)
           }
         }
       })
@@ -54,11 +89,11 @@ export function BusMap({ bus }: BusMapProps) {
       shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
     })
 
-   const map = L.map(mapRef.current, {
-  center: [bus.lat, bus.lng],
-  zoom: 11,
-  zoomControl: true,
-})
+    const map = L.map(mapRef.current, {
+      center: [bus.lat, bus.lng],
+      zoom: 11,
+      zoomControl: true,
+    })
     mapInstanceRef.current = map
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
@@ -66,14 +101,22 @@ export function BusMap({ bus }: BusMapProps) {
       maxZoom: 19,
     }).addTo(map)
 
-    // Route polyline
+    // Draw straight line initially, replace with road route after
     const routeCoords = bus.stops.map(s => [s.lat, s.lng] as [number, number])
-    L.polyline(routeCoords, {
+    const polyline = L.polyline(routeCoords, {
       color: '#3b82f6',
       weight: 4,
       opacity: 0.8,
       dashArray: '12, 8',
     }).addTo(map)
+    routeLineRef.current = polyline
+
+    // Fetch and draw actual road route
+    getRoadRoute(bus.stops).then(roadCoords => {
+      if (routeLineRef.current && mapInstanceRef.current) {
+        routeLineRef.current.setLatLngs(roadCoords)
+      }
+    })
 
     // Stop markers
     bus.stops.forEach((stop, index) => {
@@ -136,7 +179,8 @@ export function BusMap({ bus }: BusMapProps) {
       .addTo(map)
       .bindPopup(`<b>${bus.routeNumber}</b><br/>Driver: ${bus.driverName}`)
 
-    // Fit map to show full route
+    lastPositionRef.current = [bus.lat, bus.lng]
+
     const bounds = L.latLngBounds(routeCoords)
     map.fitBounds(bounds, { padding: [40, 40] })
 
@@ -144,24 +188,24 @@ export function BusMap({ bus }: BusMapProps) {
       map.remove()
       mapInstanceRef.current = null
       markerRef.current = null
+      routeLineRef.current = null
       initializedRef.current = false
     }
   }, [])
 
-  // Step 3: Socket.io live updates — filter by real bus ID
+  // Step 3: Socket.io live updates with smooth animation
   useEffect(() => {
     socket.on('busLocationUpdate', (data: any) => {
-      const now = Date.now()
-      if (now - lastUpdateRef.current < 2000) return
-      lastUpdateRef.current = now
-
       if (!markerRef.current || !mapInstanceRef.current) return
       if (!data.lat || !data.lng) return
-
-      // Only update if matches our bus ID
       if (realBusId && data.busId !== realBusId) return
 
-      markerRef.current.setLatLng([data.lat, data.lng])
+      const newPos: [number, number] = [data.lat, data.lng]
+      const from = lastPositionRef.current || newPos
+      lastPositionRef.current = newPos
+
+      // Smooth animation over 1.5 seconds instead of jumping
+      animateMarker(markerRef.current, from, newPos, 1500)
     })
 
     return () => {
