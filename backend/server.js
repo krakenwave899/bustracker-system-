@@ -28,6 +28,8 @@ app.use('/api/stops',    require('./routes/stopRoutes'));
 app.use('/api/eta',      require('./routes/etaRoutes'));
 app.use('/api/location', require('./routes/locationRoutes'));
 app.use('/api/auth',     require('./routes/authRoutes'));
+app.use('/api/admin', require('./routes/adminRoutes'));
+
 
 // Basic route to test
 app.get('/', (req, res) => {
