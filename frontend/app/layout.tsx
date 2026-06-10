@@ -3,7 +3,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'SRM Bus Tracker',
+  title: 'SNU Bus Tracker',
   description: 'Real-time bus tracking dashboard for SRM Institute',
   generator: 'v0.app',
   icons: {
